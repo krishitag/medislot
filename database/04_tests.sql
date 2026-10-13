@@ -214,9 +214,31 @@ END;
 /
 
 PROMPT ===== TC21  Functions: free slots and medicine cost =====
+DECLARE
+  v_free     NUMBER := fn_available_slots(1, SYSDATE);
+  v_cost     NUMBER := fn_medicine_cost(2);
+  v_exp_free NUMBER;
+  v_exp_cost NUMBER;
 BEGIN
-  DBMS_OUTPUT.PUT_LINE('Free slots, Dr. Rao today : ' || fn_available_slots(1, SYSDATE));
-  DBMS_OUTPUT.PUT_LINE('Medicine cost, appt 2     : ' || fn_medicine_cost(2));
+  DBMS_OUTPUT.PUT_LINE('Free slots, Dr. Rao today : ' || v_free);
+  DBMS_OUTPUT.PUT_LINE('Medicine cost, appt 2     : ' || v_cost);
+  -- recount both values with plain SQL and compare
+  SELECT d.max_daily_slots - COUNT(a.appt_id) INTO v_exp_free
+  FROM   doctor d
+  LEFT   JOIN appointment a
+         ON  a.doctor_id = d.doctor_id
+         AND a.appt_date = TRUNC(SYSDATE)
+         AND a.status   <> 'CANCELLED'
+  WHERE  d.doctor_id = 1
+  GROUP  BY d.max_daily_slots;
+  SELECT NVL(SUM(pr.quantity * m.unit_price), 0) INTO v_exp_cost
+  FROM   prescription pr JOIN medicine m ON m.med_id = pr.med_id
+  WHERE  pr.appt_id = 2;
+  IF v_free = v_exp_free AND v_cost = v_exp_cost THEN
+    DBMS_OUTPUT.PUT_LINE('PASS: both values match a direct SQL recount');
+  ELSE
+    DBMS_OUTPUT.PUT_LINE('FAIL: SQL recount gives ' || v_exp_free || ' and ' || v_exp_cost);
+  END IF;
 END;
 /
 SELECT doctor_name, fn_available_slots(doctor_id, SYSDATE) AS free_today FROM doctor ORDER BY doctor_id;
@@ -226,6 +248,27 @@ EXEC pr_doctor_schedule(1, SYSDATE);
 EXEC pr_low_stock_report;
 EXEC pr_mark_no_shows;
 EXEC pr_mark_no_shows;
+DECLARE
+  v_sched NUMBER;
+  v_low   NUMBER;
+  v_left  NUMBER;
+  v_ns    NUMBER;
+BEGIN
+  -- the cursor procedures above must agree with these plain-SQL counts
+  SELECT COUNT(*) INTO v_sched FROM appointment
+  WHERE  doctor_id = 1 AND appt_date = TRUNC(SYSDATE);
+  SELECT COUNT(*) INTO v_low  FROM medicine WHERE stock_qty <= reorder_level;
+  SELECT COUNT(*) INTO v_left FROM appointment
+  WHERE  status = 'BOOKED' AND appt_date < TRUNC(SYSDATE);
+  SELECT COUNT(*) INTO v_ns   FROM appointment WHERE status = 'NO_SHOW';
+  IF v_sched = 2 AND v_low = 3 AND v_left = 0 AND v_ns = 2 THEN
+    DBMS_OUTPUT.PUT_LINE('PASS: 2 scheduled, 3 to reorder, 2 no-shows, 0 missed visits left');
+  ELSE
+    DBMS_OUTPUT.PUT_LINE('FAIL: scheduled=' || v_sched || ' reorder=' || v_low ||
+                         ' missed left=' || v_left || ' no-shows=' || v_ns);
+  END IF;
+END;
+/
 
 PROMPT ===== Audit trail written by trigger T3 =====
 SELECT audit_id, appt_id, NVL(old_status, '-') AS old_status, new_status,

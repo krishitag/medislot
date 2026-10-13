@@ -1,0 +1,9 @@
+{
+  "name": "medislot-tools",
+  "private": true,
+  "type": "module",
+  "description": "Report helpers: UI screenshots (Playwright) and report builder",
+  "devDependencies": {
+    "playwright": "1.48.2"
+  }
+}

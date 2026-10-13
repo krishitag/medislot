@@ -60,3 +60,12 @@ npm run dev               # http://localhost:5173  (proxies /api to :4000)
 | Cursor | `pr_doctor_schedule` | parameterized explicit cursor |
 | Cursor | `pr_low_stock_report` | explicit cursor (OPEN / FETCH / CLOSE) |
 | Cursor | `pr_mark_no_shows` | implicit cursor (`SQL%ROWCOUNT`) |
+
+## Helper scripts (`tools/`)
+
+```bash
+tools/db.sh reset          # fresh load: 01 -> 02 -> 03 (sqlplus in the oracle-xe container)
+tools/db.sh tests          # reset + 04_tests.sql; output saved to screenshots/tests_output.txt
+cd tools && npm install && npx playwright install chromium && node capture_ui.mjs   # UI screenshots
+python3 tools/build_report.py   # inserts screenshots + test results into a copy of the report
+```

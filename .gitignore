@@ -5,3 +5,5 @@ dist/
 *.log
 report/
 CLAUDE.md
+screenshots/
+viva.md
