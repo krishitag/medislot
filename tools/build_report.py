@@ -12,6 +12,7 @@ Only the Python standard library is used.
 """
 import re
 import struct
+import subprocess
 import sys
 import zipfile
 from html import escape, unescape
@@ -27,6 +28,18 @@ TESTS_SQL = ROOT / "database" / "04_tests.sql"
 EMU_PER_TWIP = 635
 MAX_W = 9026 * EMU_PER_TWIP           # A4 text width with 1-inch margins
 MAX_H = int(7.5 * 914400)             # leave room for the caption on the page
+
+# captions rewritten to match how the test output was actually split across the screenshots
+CAPTION_FIXES = {
+    "Figure 6.1: Output of TC01–TC06 (booking rules)":
+        "Figure 6.1: Output of TC01–TC10 (booking rules and constraints)",
+    "Figure 6.2: Output of TC07–TC12 (constraints and status triggers)":
+        "Figure 6.2: Output of TC11–TC18 (status triggers, prescription, stock and billing)",
+    "Figure 6.3: Output of TC13–TC20 (prescription, stock and billing)":
+        "Figure 6.3: Output of TC19–TC22 (billing lock, payment, functions and cursors)",
+    "Figure 6.4: Output of TC21–TC22 (functions and cursors)":
+        "Figure 6.4: Output of TC22 (cursors) and the audit trail written by trigger T3",
+}
 
 PARA_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 TEXT_RE = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
@@ -81,14 +94,17 @@ def insert_screenshots(doc, rels, media):
         out.append(doc[pos:m.start()])
         img = SHOTS / fname
         if img.exists():
-            w, h = png_size(img)
-            rid = f"rIdShot{n + 1}"
-            target = f"media/{fname}"
-            media[f"word/{target}"] = img.read_bytes()
-            rels.append(f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
-                        f'officeDocument/2006/relationships/image" Target="{target}"/>')
-            out.append(image_paragraph(rid, 200 + n, fname, w, h))
-            placed.append(f"{fname} -> {caption}")
+            # a figure may be split over two shots: fig_X_Y.png + fig_X_Yb.png
+            extra = img.with_name(img.stem + "b.png")
+            for k, part in enumerate([img] + ([extra] if extra.exists() else [])):
+                w, h = png_size(part)
+                rid = f"rIdShot{n + 1}_{k}"
+                target = f"media/{part.name}"
+                media[f"word/{target}"] = part.read_bytes()
+                rels.append(f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
+                            f'officeDocument/2006/relationships/image" Target="{target}"/>')
+                out.append(image_paragraph(rid, 200 + 10 * n + k, part.name, w, h))
+                placed.append(f"{part.name} -> {caption}")
         else:
             out.append(m.group(0))          # keep the box so the gap is obvious
             missing.append(f"{fname}  ({caption})")
@@ -149,45 +165,50 @@ def fill_test_table(doc, results):
 
 
 # ------------------------------------------------------------------ 3. appendix listing
-def refresh_test_listing(doc):
-    paras = list(PARA_RE.finditer(doc))
-    texts = [ptext(p.group(0)) for p in paras]
-    try:
-        head = texts.index("-- MediSlot : 04_tests.sql  --  test cases TC01 .. TC22") - 1
-        end = texts.index("SET FEEDBACK ON", head)
-    except ValueError:
-        return doc, "04_tests.sql listing not found in the appendix - left unchanged"
+LISTINGS = ["database/03_seed.sql", "database/04_tests.sql"]
 
-    old_listing = [t.rstrip() if t.strip() else "" for t in texts[head:end + 1]]
-    new_lines = TESTS_SQL.read_text().rstrip("\n").splitlines()
-    new_cmp = [l.rstrip() for l in new_lines]
-    if old_listing == new_cmp:
-        return doc, "04_tests.sql listing already up to date"
-    # only accept a difference confined to the TC21/TC22 block (the self-checks added there)
-    pre = 0
-    while pre < min(len(old_listing), len(new_cmp)) and old_listing[pre] == new_cmp[pre]:
-        pre += 1
-    suf = 0
-    while (suf < min(len(old_listing), len(new_cmp)) - pre
-           and old_listing[-1 - suf] == new_cmp[-1 - suf]):
-        suf += 1
+
+def file_lines(text):
+    return [l.rstrip() for l in text.rstrip("\n").splitlines()]
+
+
+def committed_versions(rel):
+    """Every committed version of a file, as lists of lines (newest first)."""
+    shas = subprocess.run(["git", "-C", str(ROOT), "log", "--format=%H", "--", rel],
+                          capture_output=True, text=True).stdout.split()
+    out = []
+    for sha in shas:
+        r = subprocess.run(["git", "-C", str(ROOT), "show", f"{sha}:{rel}"], capture_output=True, text=True)
+        if r.returncode == 0:
+            out.append(file_lines(r.stdout))
+    return out
+
+
+def refresh_listing(doc, rel):
+    """Replace the appendix copy of `rel` with the current file, but only if the copy in the
+    report matches some committed version of that file (so nothing hand-edited is lost)."""
+    current = file_lines((ROOT / rel).read_text())
+    paras = list(PARA_RE.finditer(doc))
+    texts = [t.rstrip() if t.strip() else "" for t in (ptext(p.group(0)) for p in paras)]
     try:
-        lo = old_listing.index(next(l for l in old_listing if l.startswith("PROMPT ===== TC21")))
-        hi = old_listing.index(next(l for l in old_listing if l.startswith("PROMPT ===== Audit trail")))
-    except (StopIteration, ValueError):
-        lo = hi = -1
-    if not (lo <= pre and len(old_listing) - suf <= hi):
-        return doc, ("04_tests.sql listing in the report differs from database/04_tests.sql outside "
-                     "TC21-TC22 - left unchanged, please check it by hand")
+        head = texts.index(current[1]) - 1        # line 2 of each file is its unique title line
+    except ValueError:
+        return doc, f"{rel}: listing not found in the appendix - left unchanged"
+    if texts[head:head + len(current)] == current:
+        return doc, f"{rel}: listing already up to date"
+    old = next((v for v in committed_versions(rel) if texts[head:head + len(v)] == v), None)
+    if old is None:
+        return doc, (f"{rel}: listing in the report doesn't match any committed version - "
+                     "left unchanged, please check it by hand")
 
     template = paras[head + 1].group(0)            # a normal code line paragraph
     def code_para(line):
         return re.sub(r"(<w:t[^>]*>)[^<]*(</w:t>)",
                       lambda m: m.group(1) + escape(line if line else " ", quote=False) + m.group(2),
                       template, count=1)
-    new_xml = "".join(code_para(l) for l in new_lines)
-    doc = doc[:paras[head].start()] + new_xml + doc[paras[end].end():]
-    return doc, f"04_tests.sql listing refreshed ({len(old_listing)} -> {len(new_lines)} lines)"
+    new_xml = "".join(code_para(l) for l in current)
+    doc = doc[:paras[head].start()] + new_xml + doc[paras[head + len(old) - 1].end():]
+    return doc, f"{rel}: listing refreshed ({len(old)} -> {len(current)} lines)"
 
 
 # ------------------------------------------------------------------ 4. leftovers
@@ -233,6 +254,10 @@ def main():
     new_rels, media = [], {}
 
     doc, placed, missing = insert_screenshots(doc, new_rels, media)
+    for old, new in CAPTION_FIXES.items():
+        if f">{escape(old, quote=False)}<" not in doc:
+            print(f"  NOTE caption not found (left as is): {old}")
+        doc = doc.replace(f">{escape(old, quote=False)}<", f">{escape(new, quote=False)}<")
 
     if TESTS_OUT.exists():
         results = parse_tests(TESTS_OUT.read_text())
@@ -240,7 +265,10 @@ def main():
     else:
         filled, skipped = [], [f"{TESTS_OUT.relative_to(ROOT)} not found - run tools/db.sh tests first"]
 
-    doc, listing_note = refresh_test_listing(doc)
+    listing_notes = []
+    for rel in LISTINGS:
+        doc, note = refresh_listing(doc, rel)
+        listing_notes.append(note)
 
     rels_xml = rels_xml.replace("</Relationships>", "".join(new_rels) + "</Relationships>")
     with zipfile.ZipFile(DST, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -266,7 +294,9 @@ def main():
     for s in skipped:
         print("  SKIPPED", s)
 
-    print("\nAppendix:", listing_note)
+    print("\nAppendix listings:")
+    for note in listing_notes:
+        print("  ", note)
 
     issues, code_angle, n_comments = scan(doc)
     print(f"\nLeftover check ({len(issues)} item(s)):")

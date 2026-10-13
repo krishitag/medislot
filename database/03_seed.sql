@@ -52,18 +52,25 @@ COMMIT;
 ALTER TRIGGER trg_appt_validate DISABLE;
 
 DECLARE
-  -- past dates are plain offsets; future dates skip Sundays
-  dm7 DATE := TRUNC(SYSDATE) - 7;  dm6 DATE := TRUNC(SYSDATE) - 6;
-  dm5 DATE := TRUNC(SYSDATE) - 5;  dm4 DATE := TRUNC(SYSDATE) - 4;
-  dm3 DATE := TRUNC(SYSDATE) - 3;  dm2 DATE := TRUNC(SYSDATE) - 2;
-  dm1 DATE := TRUNC(SYSDATE) - 1;  d0  DATE := TRUNC(SYSDATE);
-  dp2 DATE := TRUNC(SYSDATE) + 2 +
-              CASE WHEN TO_CHAR(TRUNC(SYSDATE) + 2, 'DY', 'NLS_DATE_LANGUAGE=ENGLISH') = 'SUN'
-                   THEN 1 ELSE 0 END;
-  dp3 DATE := TRUNC(SYSDATE) + 3 +
-              CASE WHEN TO_CHAR(TRUNC(SYSDATE) + 3, 'DY', 'NLS_DATE_LANGUAGE=ENGLISH') = 'SUN'
-                   THEN 1 ELSE 0 END;
+  -- the clinic is closed on Sundays: a past date that falls on a Sunday moves
+  -- back to Saturday, a future one moves forward to Monday
+  dm7 DATE; dm6 DATE; dm5 DATE; dm4 DATE; dm3 DATE; dm2 DATE; dm1 DATE;
+  d0  DATE := TRUNC(SYSDATE);
+  dp2 DATE; dp3 DATE;
+
+  FUNCTION work_day (p_offset NUMBER) RETURN DATE IS
+    d DATE := TRUNC(SYSDATE) + p_offset;
+  BEGIN
+    IF TO_CHAR(d, 'DY', 'NLS_DATE_LANGUAGE=ENGLISH') = 'SUN' THEN
+      d := d + SIGN(p_offset);
+    END IF;
+    RETURN d;
+  END work_day;
 BEGIN
+  dm7 := work_day(-7);  dm6 := work_day(-6);  dm5 := work_day(-5);
+  dm4 := work_day(-4);  dm3 := work_day(-3);  dm2 := work_day(-2);
+  dm1 := work_day(-1);  dp2 := work_day(2);   dp3 := work_day(3);
+
   -- past, completed visits (appt_id 1..6)
   INSERT INTO appointment (patient_id, doctor_id, appt_date, slot_no, status) VALUES (1, 1, dm7, 2, 'COMPLETED');
   INSERT INTO appointment (patient_id, doctor_id, appt_date, slot_no, status) VALUES (2, 4, dm6, 1, 'COMPLETED');
